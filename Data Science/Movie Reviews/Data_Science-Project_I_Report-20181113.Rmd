@@ -1,0 +1,755 @@
+---
+title: 'Fresh Over Rotten: The Value of a Critic''s Pick in Hollywood'
+author:
+- "Sergio E. Betancourt"
+- 'Master of Science in Statistics, University of Toronto'
+- "STA2453 - Data Science Consultation"
+date: '2018-11-13'
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes: \usepackage{booktabs}
+geometry: margin=1.5cm
+abstract: |
+  An analysis of the movie business based on New York Times and OMDB data, in the form of sentiment analysis of critics' reviews, factors that drive box office revenue, and factors that influence award nominations (and possibly subsequent wins).
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2);library(tidyverse);library(dplyr);
+library(jsonlite);library(httr);
+library(kableExtra);library(boxoffice);
+library(reticulate);library(feather);library(xtable);
+use_condaenv("/Users/Balthazar/anaconda/envs/r-reticulate");
+#Activate above r-reticulate env by typing "source activate r-reticulate"
+#Consider using selector-gadget to determine HTML tags
+#Rvest - R's Beautiful soup
+#textblob -- "from textblob import TextBlob"
+#Reticulate -- call Python in R and manage Python objects as R's
+#Remark.js -- 
+#xarigan -- Yuhi
+```
+
+#Motivation
+
+A report by the firm PwC (available in https://www.statista.com) estimated global film revenue to be approximately USD **\$38.3 billion** in the year 2016, with forecasted growth for the foreseeable future. In the US alone, film revenue in the year 2016 was estimated to be USD \$11.38 billion, about 30% of the World's revenue. With such a sizable market it is important to understand the factors influencing film earnings, as well as film prestige in the shape of critics' reviews and reputable awards.
+
+In this report, I consider movie data from the NYT Movie Reviews (<https://developer.nytimes.com/movie_reviews_v2.json>) and OMDB (<http://www.omdbapi.com/>) APIs the for the years 2010 to 2017 inclusive. Although rich, the data procured is not entirely complete, which poses a major challenge when carrying out the intended rigurous analysis. Nonetheless, below I discuss the extent to which I use, modify, or throw out any of these exceptions.
+
+I shall focus my analysis around the below questions:
+
+1.  What is the marginal financial contribution of a New York Times (NYT) critic's pick to a movie's revenue?
+2.  Is there a relationship between critics' picks and earning a nomination to a prestigious award?
+3.  What are the factors that contribute to earning a nomination and what is the role of review sentiment?
+    + Does gender play a role in a movie's likelihood of earning a nomination to an award?
+
+To address the above questions effectively it is necessary to clarify that a critic may not pick a movie with the sole intention of determining whether it shall be a blockbuster or not--critics will often look for originality, timeliness, and quality, and there are many blockbusters out there that they do not deem worthy of their pick (e.g., Marvel's The Avengers series). Moreover, although not discussed in detail here, the timing of a critics' review may or may not play a part in box office performance and/or nomination for a prestigious award. Some critics may get to review the movie before it is released to the public, whereas others may not have the chance to review if no pre-screening was done.
+
+```{r loading, eval=T, echo=F, warning=FALSE}
+#Loading data from laptop after it was constructed
+nyt_2010_2017_pick_raw <- as.data.frame(read_csv("https://raw.githubusercontent.com/sergiosonline/misc/master/data_science/data/nyt_2010_2017_pick_raw.csv",col_names=T,na="NA",col_types = cols()),stringsAsFactors=FALSE);
+nyt_2010_2017_nopick_raw <- as.data.frame(read_csv("https://raw.githubusercontent.com/sergiosonline/misc/master/data_science/data/nyt_2010_2017_nopick_raw.csv",col_names=T,na="NA",col_types = cols()),stringsAsFactors=FALSE);
+#nyt_2010_2017_pick <- read.csv("/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_pick_coded.csv",header=T,stringsAsFactors = FALSE)
+
+nyt_2010_2017_pick <- as.data.frame(read_csv("https://raw.githubusercontent.com/sergiosonline/misc/master/data_science/data/nyt_2010_2017_pick_coded.csv",col_names=T,na="NA",col_types = cols()),stringsAsFactors=FALSE);
+nyt_2010_2017_nopick <- as.data.frame(read_csv("https://raw.githubusercontent.com/sergiosonline/misc/master/data_science/data/nyt_2010_2017_nopick_coded.csv",col_names=T,na="NA",col_types = cols()),stringsAsFactors=FALSE);
+
+#nyt_2010_2017_nopick_py <- data.frame(display_title=nyt_2010_2017_nopick$display_title,summary_short=gsub("[^A-Za-z0-9 ]", "", nyt_2010_2017_nopick$summary_short),critics_pick=nyt_2010_2017_nopick$critics_pick);
+
+#nyt_2010_2017_pick_py <- data.frame(display_title=nyt_2010_2017_pick$display_title,summary_short=gsub("[^A-Za-z0-9 ]", "", nyt_2010_2017_pick$summary_short),critics_pick=nyt_2010_2017_pick$critics_pick)
+
+#write.table(nyt_2010_2017_nopick_py,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_nopick_py.csv",row.names = FALSE,sep=",");
+#write.table(nyt_2010_2017_pick_py,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_pick_py.csv",row.names = FALSE,sep=",");
+nyt_2010_2017 <- rbind(nyt_2010_2017_pick,nyt_2010_2017_nopick);
+nyt_2010_2017_raw <- rbind(nyt_2010_2017_pick_raw,nyt_2010_2017_nopick_raw);
+```
+
+***
+
+#Analysis at a Glance
+
+The below boxplots (excluding movies with NA values in box office earnings) outline summary statistics for movie earnings, comparing (1) those picked by critics versus those that were not, (2) earnings across genre for the entire time period. For the sake of cleanliness in the following visualizations, I limited maximum earnings in all of the below boxplots to USD $300 million. I also excluded genres with less than 5 entries in plot (2). I eliminated these filters and considered the complete dataset in my numerical analysis, except where indicated otherwise.
+
+Note the large dispersion of boxoffice revenue in the below plots, with a sizable number of movies with revenue above the plots' whiskers. To make a fair comparison, I sampled randomly a number of non-picked equal to the number of picked movies I pulled from the APIs. Some movies tend to do extremely well compared to others in both categories, and this data might give us a rough idea of the why. Moreover, there appears to be a larger number of relative outperformers in the critics' pick category, even though median revenue for the non-picks appears slightly higher.
+
+Genre-wise, the variability of revenue accross genres is evident, with some exhibiting a higher median but also higher dispersion (Action and Animation), while others show neither (Documentary and Crime). This might be due difference in sizes of each genre level.
+
+```{r eda2, include=T,eval=T,echo=F,fig.align='center'}
+nyt_2010_2017_boxcomplete <- nyt_2010_2017;
+nyt_2010_2017_boxcomplete <- nyt_2010_2017_boxcomplete %>% drop_na(boxoffice);
+
+#####
+nyt_2010_2017_bc <- rbind(sample_n(nyt_2010_2017_boxcomplete[which(nyt_2010_2017_boxcomplete$critics_pick==0),],659),nyt_2010_2017_boxcomplete[which(nyt_2010_2017_boxcomplete$critics_pick==1),]);
+
+
+par(las=3, mfrow=c(1,2));
+layout(matrix(c(1,2,2), nrow = 1, ncol = 3, byrow = TRUE))
+boxplot(as.numeric(nyt_2010_2017_bc[,10])~nyt_2010_2017_bc[,3],
+        main="Boxplot of Revenue by Pick\nvs Non in 2010 - 2017",xlab="Non-pick (0), Critic's Pick (1)",ylab="Boxoffice revenue in USD",ylim=c(0,328757749));
+
+#Genre and box complete
+#Romance, Thriller, Music, Fantasy, and Mystery have less than 5 entries each
+#Command: table(nyt_2010_2017_boxcomplete[,11])
+
+nyt_2010_2017_boxcomplete <- filter(nyt_2010_2017_boxcomplete, genre != "Fantasy" & genre != "Music" & genre != "Mystery" & genre != "Thriller" &  genre != "Romance" & genre != "Western" & genre != "Sci-Fi" & genre != "Film-Noir" & genre != "Adult")
+
+boxplot(as.numeric(nyt_2010_2017_boxcomplete[,10])~nyt_2010_2017_boxcomplete[,11],
+        main="Boxplot of Movie Revenue by\nGenre in 2010 - 2017",ylab="Boxoffice revenue in USD",ylim=c(0,328757749)); #title(xlab="Movie Genre", line = 4)
+```
+
+The selective nature of the critics' picks means the overall number of movies deemed critics' picks is substantially smaller than that of movies undeserving of this title. Of the **3245** movies collected for this analysis, only **659** were picked by a New York Times's critic.
+
+Below is a more detailed breakdown of picks by genre:
+
+```{r eda3, include=T,eval=T,echo=F}
+#Here is a breakdown of pick vs non-picks across the genres obtained
+genre_break <- data.frame(nonpick=table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,1],pick=table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,2],rowtotal = table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,1]+table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,2], proppicked = round((table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,2]/(table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,1]+table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)[,2])),2)*100,
+    row.names=rownames(table(nyt_2010_2017_boxcomplete$genre,nyt_2010_2017_boxcomplete$critics_pick)));
+
+#Changing names of columns
+colnames(genre_break) <- c("Not Picked","Picked","Total","Proportion Picked\n(%)");
+
+#Beautifying table
+kable(genre_break) %>%
+  kable_styling(bootstrap_options = "striped", position="center")
+```
+
+Of importance are the extreme values in the above table for proportion of movies picked by NYT critics, grouped by genre. Biography, Documentary, Drama, Adventure, and Animation show the highest proportions, whereas Action and Comedy show the lowest. This is a further line of investigation that will not be addressed in this project directly but in a future effort. However, we shall incorporate genre as a factor in this analysis.
+
+\pagebreak
+
+\newpage
+
+# Analysis
+
+##1. What is the marginal financial contribution of a New York Times (NYT) critic's pick to a movie's revenue?
+
+To quantify the added value of a critic's pick to a given movie, I can carry out a standard regression with revenue as dependent variable, and other information as explanatory variables. Adjustments were made on the basis of data features and the the usual diagnostics.
+
+$$
+\begin{aligned}
+\log(\text{boxoffice}_i)=\alpha+\beta_{1}\text{criticpick}_i+\beta_{2}\text{genre}_i+\beta_{3}\text{nomination}_i+\beta_{4}\text{rating}_i+\epsilon\\
+\text{where } \epsilon \sim N(0,\sigma^2) \text{ and } \alpha \text{ is the grand mean}
+\end{aligned}
+$$
+
+An ANOVA test performed on the regression model of all movies with the logarithm of boxoffice revenue as the dependent variable, shows the variables **genre**, **nomination**, and **MPAA rating** to be significant at the 5% level.
+
+```{r q1b,echo=F, eval=T, include=F}
+regdat1 <- nyt_2010_2017_pick[complete.cases(nyt_2010_2017_pick),];
+#Used regdat2 for this analysis
+regdat2 <- nyt_2010_2017[complete.cases(nyt_2010_2017[-1613,][-478,]),]
+
+#filtering out genres with very low movie counts
+regdat2 <- filter(regdat2, genre != "Fantasy" & genre != "Music" & genre != "Mystery" & genre != "Thriller" &  genre != "Romance")
+
+#Consider Pareto
+#MLE for alpha = n /sum(log(xi/min(x)))
+#Nomination is tricky because it can come a year after the release. Effect coding.
+mod2 <- lm(log(boxoffice)~critics_pick+genre+nomination+mpaa_rating,contrasts = list(genre = contr.sum),data=regdat2);
+#mod2$contrasts;
+summary(mod2);
+summary(aov(log(boxoffice)~critics_pick+factor(genre)+genre+nomination+mpaa_rating,data=regdat2));
+#plot(mod2,which=1:4); #influential obs: 1613, 1233, 2374
+
+#Genre, nomination, and MPAA_Rating are statistically significant. Critics's pick is not. Non-normality's at play here.
+```
+
+This regression model indicates statistically significant differences of the following indicators from the grand average of boxoffice revenue across the entire time period:
+
+- **Genre**: Action, Documentary, and Drama (Multiplicative factors of approximately **3.10**, **0.17**, and **0.40**, respectively)
+- **Nomination** (Multiplicative factor of approximately **7.15**)
+- **Rating**: Not Rated and Rated R (Multiplicative factors of **0.011** and **0.206**, respectively)
+
+```{r, eval=F, echo=F}
+mult <- c(3.10,0.17,.40)
+dfgen <- data.frame(row.names = list("Action","Documentary","Drama"),genrv,stringsAsFactors=F)
+colnames(dfgen) = c("Multiplicative")
+```
+
+Therefore, this model suggests there exists a significant positive contribution of a nomination to box office revenue. With regards to genre, everything else constant: The average action movie seems to do exceedingly well, especially when compared to documentaries and dramas, while the average R-rated movie performs poorly. This might be due to the age restriction, which curtails young individuals from watching some of these restricted films.
+
+As per the diagnostics of this model, the QQ-plot of residuals does not offer strong evidence for their normality, which I sought to ameliorate by taking the logarithm of box office. It is possible for a generalized linear model to fit the data better. Other aspects of concern are the number of entries with missing data, in some cases due to spelling differences between the data APIs, while in other cases due to lack of revenue amount (international/restricted films).
+
+##2. Is there a relationship between critics' picks and earning a nomination to a prestigious award?
+
+Now I consider the role of a critic's pick in a movie's award nomination (restricted to BAFTA, Oscars, and Golden Globes). 
+
+```{r q21, echo=F, include=T, eval=T}
+contable <- data.frame(no_nomi = table(nyt_2010_2017$critics_pick,nyt_2010_2017$nomination)[,1],nomi = table(nyt_2010_2017$critics_pick,nyt_2010_2017$nomination)[,2])
+
+contable <- data.frame(contable,rowtotal=c(sum(contable[1,]),sum(contable[2,])),
+                       prop_nomi=round(c(contable[1,2]/sum(contable[1,]),contable[2,2]/sum(contable[2,])),3),
+                       row.names=c("non-pick","pick"))
+
+kable(contable) %>%
+  kable_styling(bootstrap_options = "striped", position="center")
+```
+
+```{r q22, echo=F, include=T, eval=T}
+#Wald CIs for risk difference and relative risk
+pi1 <- contable[1,4]; pi2 <- contable[2,4]
+
+riskdiff <- pi1-pi2;
+zcrit <- qnorm(.975);
+stderr <- sqrt((pi1*(1-pi1))/contable[1,3] + (pi2*(1-pi2))/contable[2,3] );
+cidiff <- c(riskdiff - zcrit*stderr,riskdiff - zcrit*stderr);
+
+rr <- pi1/pi2;lrr <- log(rr);
+err <- sqrt(((1-pi1)/contable[1,1]) + ((1-pi2)/contable[2,1]));
+lci <- c(lrr-zcrit*err,lrr+zcrit*err);
+cirel <- exp(lci);
+
+#LRT for testing independence
+```
+
+I obtained a 95% confidence interval for the relative risk: **(`r round(cirel,3)`)**. This interval and its middlepoint estimate sugggest that, according to the data, failing to be picked by a New York Times critic results in an approximate reduction by **75%** of the chance of earning a nomination to an award, when compared to a movie that earned a pick. Therefore, there is a positive relationship between being picked by a critic an earning a nomination and possibly winning an award. However, this may not be the only factor at play.
+
+
+##3. What are the factors that contribute to earning a nomination and what is the role of review sentiment?
+
+To quantify the relationship between critic's picks and other variables to the probability of earning a nomination to a prestigious award (Oscar, BAFTA, or Golden Globe), I can perform a logistic regression. I codified the genders of lead actor and director for all movies for which the data was available.
+
+```{r q3a, echo=F,include=F,eval=T}
+#Romance and Thriller only have 1 entry each
+logi_data <- nyt_2010_2017[,c(1:3,11:15)]
+logi_data <- logi_data[complete.cases(logi_data),]
+logi_data2 <- filter(logi_data, genre != "Fantasy" & genre != "Romance" & genre != "Mystery" & genre != "Thriller")
+
+mod3 <- glm(nomination~director+genre+actor,data=logi_data2,family=binomial,contrasts = list( genre = contr.sum));#,contrasts = list(c(mpaa_rating,director,actor) = contr.sum));
+#,contrasts = list(genre = contr.sum)
+#mod2$contrasts;
+summary(mod3);
+## odds ratios and 95% CI
+#confint(mod3);
+```
+
+A logistic regression model with an indicator variable for nomination as the dependent variable ("1" if nominated, 0 otherwise), was fit against genre, gender of lead director, and gender of lead actor. I was able to encode a the lead actor and director gender variables of a large number of movies across both critics' and non-critics' picks by harnessing the Gender API (<https://gender-api.com/en/>). This API takes a first name in lower case and returns its classification of "male" versus "female." Unfortunately, this API has a limit of 500 free calls for any registered user, so I had to do a great portion of the encoding by hand. 
+
+$$
+\begin{aligned}
+\text{logit}(\pi_{i}(1))=\alpha+\beta_{1}\text{genre}_{i}+\beta_{2}\text{fem-dir}_{i}+\beta_{3}\text{fem-lead}_{i}\\
+\end{aligned}
+$$
+
+This logistic model suggests that, for a given genre, having a female lead actor almost **doubles** the odds **(`r round(exp(coef(mod3)[11]),3)`)** of earning a nomination to any of the BAFTA, Oscar, or Golden Globe awards, when compared to a movie with a male actor. However, the genre of the director was not significant in determining the probability of earning a nomination. This can mean good news for female participation in lead roles as production companies may seek to increase their prestige by creating stories with female casts in mind.
+
+The results could be further improved with more extensive codification and more data without missing information. Another interesting covariate that could be considered in this model is the IMDB score that is present in the OMDB API. These scores are determined by groups of critics, which means that the higher the score, the more positive the average critique of the movie.
+
+As it pertains to sentiment, I harnessed Python's language processing capabilities to analyze the reviews' summaries available via the NYT API. I then proceeded to use the built-in, Naive Bayes Analyzer tool (already trained on movie reviews) to compare sentiments between movies that were critics' picks versus those not picked. This classifier is a supervised learning approach that works well with binary classification of text bodies. The classifier's outputs are the classification ("pos" or "neg" in this case), as well as probabilities of assignment to each of these two binary categories.
+
+Note that the Naive Bayes Analyzer used in this analysis was pre-trained on Bo Pang and Lillian Lee's Movie Reviews Dataset, which was built from thousands of IMDB reviews. Therefore it performs extremely well when applied this type of review text.
+
+```{r q3b, eval=T,include=T,echo=F}
+nyt_2010_2017_sentiment <- as.data.frame(read_csv("https://raw.githubusercontent.com/sergiosonline/misc/master/data_science/data/nyt_2010_2017_python_output.csv",col_names=T,na="NA",col_types = cols()),stringsAsFactors=FALSE);
+
+sentiment_cont <- t(table(nyt_2010_2017_sentiment$critics_pick,nyt_2010_2017_sentiment$classif));
+
+sentiment_break <- data.frame(not_picked=sentiment_cont[,1],
+                              picked=sentiment_cont[,2],
+                              total = sentiment_cont[,1]+sentiment_cont[,2],
+                              propnotpicked = round( (sentiment_cont[,1]/(sentiment_cont[,1]+sentiment_cont[,2])),3),
+                              row.names=rownames(sentiment_cont));
+
+kable(sentiment_break) %>%
+  kable_styling(bootstrap_options = "striped", position="center")
+```
+
+```{r q3c, echo=F, include=T, eval=T}
+#Wald CIs for risk difference and relative risk
+pi1 <- sentiment_break[1,4]; pi2 <- sentiment_break[2,4];
+
+riskdiff <- pi1-pi2;
+zcrit <- qnorm(.975);
+stderr <- sqrt((pi1*(1-pi1))/653 + (pi2*(1-pi2))/2590 );
+ciriskdiff2 <- c(riskdiff - zcrit*stderr,riskdiff + zcrit*stderr);
+
+rr <- pi1/pi2;lrr <- log(rr);
+err <- sqrt(((1-pi1)/561) + ((1-pi2)/2023));
+lci2 <- c(lrr-zcrit*err,lrr+zcrit*err);
+cirel2 <- exp(lci2);
+#LRT for testing independence
+```
+
+A Wald 95% confidence interval for the risk ratio of a movie failing to be picked by a NYT critic conditional on review sentiment is **(`r round(cirel2,3)`)**. This indicates that a review with a negative sentiment classification is approximately **`r round(rr,3)`** times more likely to correspond to a movie that was not picked by a critic versus one that carries a positive sentiment classification.
+
+The above risk ratio is not very dramatic, which potentially underestimates the relationship between review sentiment and critic's pick. Nonetheless, this may be due to the fact that only a dozen or so of words corresponding to each review were available via the API. Perhaps with a larger portion of the review text the classification could be enhanced.
+
+#Further Considerations
+
+The goal of this work was to implement some sound yet simple analysis to a topic of my interest. Films and television are very popular forms of entertainment that can educate and entertain us, and I was very much influenced by the hours I spent in front of a screen while growing up. 
+
+The scope of this project can be extended to a longer time period, even incorporating time into the modelling, as movie release dates may affect their performance. Moreover, it would be interesting to get hands on data on TV shows and digital-only productions (e.g., Netflix and Amazon exclusives, etc.) in order to look at some of the elements (qualitative and quantitative) that separate traditional from non-traditional media. Other explanatory variables of interest would be movie duration, weekly/periodic box office revenue, production cost, etc.
+
+The sentiment analysis portion of this work can be greatly extended to incorporate full review text (through targeted scraping) and better analytics. More sophistication can lead to more interesting and controversial questions. Moreover, social media content could also allow the construction of a portrait of movies, and may be linked to box office revenue.
+
+I do not make mention of a literature review in the construction of this report because there was none. My goal from the start of this project was to brandish curiosity as my only weapon. There are many interesting findings and methods applied to this exact dataset/situation, and the next steps in this project would be to review, confirm, and possibly extend some of these.
+
+\pagebreak
+
+\newpage
+
+# Appendix: Data Considerations
+
+I collected the data via the NYT and OMDB APIs, limiting the scope of my search to the years 2010-2017.
+
+NYT has the following important data available:
+
+* Title
+* MPAA Rating (missing for several entries)
+* Critics' Pick (0 or 1)
+* Short Summary
+* Opening Date
+
+OMDB has the following important data available:
+
+* Title
+* Box Office Earnings (missing for several entries)
+* Genre
+* Director
+* Writer
+* Actors
+* Country
+* Awards
+* Various Critical Ratings
+
+This is a random sample of ten movies from the final dataset I constructed for this analysis. This table should illustrate the data structure and information considered in this report.
+
+```{r eda, include=T,eval=T,echo=F}
+nyt_2010_2017_demo <- nyt_2010_2017[complete.cases(nyt_2010_2017),]
+nyt_2010_2017_demo <- sample_n(nyt_2010_2017_demo[-4][-4][-4][-10],size=10)
+nyt_2010_2017_demo1 <- nyt_2010_2017_demo[,1:6]
+nyt_2010_2017_demo1[,1] <- substr(nyt_2010_2017_demo1[,1], 1, 16)
+nyt_2010_2017_demo2 <- nyt_2010_2017_demo[,c(1,7:11)]
+nyt_2010_2017_demo2[,1] <- substr(nyt_2010_2017_demo2[,1], 1, 16)
+
+kable(nyt_2010_2017_demo1) %>%
+  kable_styling(bootstrap_options = "striped", position="center")
+
+kable(nyt_2010_2017_demo2) %>%
+  kable_styling(bootstrap_options = "striped", position="center")
+
+```
+
+In order to build the core dataset, I queried the NYT API using a loop that covered 10-day periods from January 2010 to December 2017. Then I used the movie names to make requests to the OMDB API to get the above additional information. Specifically, I added box office, genre, director, writer, actors, and awards to the core NYT table. The OMDB API has a daily call limit of 1000 entries returned, which meant that the data enrichment process took a few days to complete. Moreover, several movie titles are spelled differently or contain different characters between these two data sources. However, I took the NYT title spelling as canon and obtained the extra data where there was an exact match. I treated missing data as NA in order to simplify the data procurement process, aware that with more careful consideration the data set could be further enriched.
+
+To simplify the dataset I assume that the first name in the list of actors obtained from OMDB is the lead actor, and the first genre that appears in this same source is the main genre. I also converted the strings in the boxoffice field to numbers, disregarding the currency while simultaneously assuming that all numbers available are in USD. Moreover, I encoded the awards variable, indicating the value "1" for at least one nomination (including wins) to either a BAFTA, Oscar, or Golden Globe award. Movies with no nominations (or wins) to any of these prestigious awards were assigned a value of "0".
+
+```{r credentials, include=F, eval=T}
+#Keys
+#NYT: 
+apikey_times <- "53b00ad4aec0469c8b183dd41d2a9cef";
+nyt_url <- "http://api.nytimes.com/svc/movies/v2/reviews/search.json?";
+#OMDB: f3a1a2ab
+omdb_url <- "http://www.omdbapi.com/"; apikey_omdb <- "f3a1a2ab";
+
+#To search for general key words "query=get&"
+#To search for specific titles "query='get+out'&"
+```
+
+```{r procurement1, eval=F, include=F}
+nyt_jan_nopick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame",row.names=NULL)
+
+nyt_jan_nopick1 <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame",row.names=NULL)
+
+nyt_jan_nopick2 <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame",row.names=NULL)
+
+nyt_jan_nopick3 <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame",row.names=NULL)
+```
+
+```{r procurement2, include=F, eval=F}
+#Building the critics' picks dataframe
+nyt_jan_pick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame",row.names=NULL);
+
+nyt_query <- "query=&critics-pick=Y&";
+nyt_qdate <- "opening-date=2017-01-01;2017-01-31&"; #date range
+nyt_key <- "api-key="; #apikey_times contains NYT api key
+nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+nyt_dat <- fromJSON(nyt_url2); 
+nyt_jan_pick <- rbind(nyt_jan_pick,nyt_dat$results[-11][-10]); row.names(nyt_jan_pick)<-nyt_jan_pick$display_title;
+```
+
+```{r procurement3,eval=F,include=F}
+#Building the non-picks dataframe
+nyt_query <- "query=&critics-pick=N&";
+nyt_qdate <- "opening-date=2017-01-01;2017-01-10&"; #date range
+nyt_key <- "api-key="; #apikey_times contains NYT api key
+nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+nyt_dat <- fromJSON(nyt_url2); 
+nyt_jan_nopick1 <- rbind(nyt_jan_nopick1,nyt_dat$results[-11][-10]);
+row.names(nyt_jan_nopick1)<-nyt_jan_nopick1$display_title;
+
+nyt_query <- "query=&critics-pick=N&";
+nyt_qdate <- "opening-date=2017-01-11;2017-01-22&"; #date range
+nyt_key <- "api-key="; #apikey_times contains NYT api key
+nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+nyt_dat <- fromJSON(nyt_url2); 
+nyt_jan_nopick2 <- rbind(nyt_jan_nopick2,nyt_dat$results[-11][-10]);
+row.names(nyt_jan_nopick2)<-nyt_jan_nopick2$display_title;
+
+nyt_query <- "query=&critics-pick=N&";
+nyt_qdate <- "opening-date=2017-01-23;2017-01-31&"; #date range
+nyt_key <- "api-key="; #apikey_times contains NYT api key
+nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+nyt_dat <- fromJSON(nyt_url2); 
+nyt_jan_nopick3 <- rbind(nyt_jan_nopick3,nyt_dat$results[-11][-10]);
+row.names(nyt_jan_nopick3)<-nyt_jan_nopick3$display_title;
+
+# To combine all 3 rounds above (dataframes) I must first eliminate the data.frame objects within them (i.e., columns link and multimedia)
+nyt_jan_nopick_mega <- rbind(nyt_jan_nopick1,nyt_jan_nopick2,nyt_jan_nopick3);
+preemptive_jan <- rbind(nyt_jan_pick,nyt_jan_nopick_mega)
+```
+
+```{r procurement4, eval=F,include=F}
+nyt_jan_nopick_names <- c(nyt_jan_nopick1$display_title,nyt_jan_nopick2$display_title,nyt_jan_nopick3$display_title)
+nyt_jan_pick_names <- c(nyt_jan_pick$display_title)
+
+nyt_jan_nopick_box <-NULL
+
+for (i in 1:length(nyt_jan_nopick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_jan_nopick$display_title[i], apikey = apikey_omdb));
+  nyt_jan_nopick_box <- c(nyt_jan_nopick_box,content(omdb_q)$BoxOffice);
+}
+
+nyt_jan_pick_box <-NULL
+
+for (i in 1:length(nyt_jan_pick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_jan_pick$display_title[i], apikey = apikey_omdb));
+  nyt_jan_pick_box <- c(nyt_jan_pick_box,content(omdb_q)$BoxOffice);
+}
+
+#Cleaning up boxoffice returns and adding them to dataframes
+nyt_jan_nopick_mega <- cbind(nyt_jan_nopick_mega,boxoffice=as.numeric(gsub("[^0-9.]", "", nyt_jan_nopick_box)))
+nyt_jan_pick <- cbind(nyt_jan_pick,boxoffice=as.numeric(gsub("[^0-9.]", "", nyt_jan_pick_box)))
+```
+
+
+```{r coredata, eval=F,include=F}
+#####
+#Pull data in 10-day periods to build database for the year 2017
+#Create empty data frame to populate
+#nyt_2017_pick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame");
+
+nyt_2010_2017_pick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame");
+
+#nyt_2017_nopick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame");
+
+nyt_2010_2017_nopick <- structure(list(display_title=character(),mpaa_rating=character(),critics_pick=character(),byline=character(),headline=character(),summary_short=character(),publication_date=character(),opening_date=character(),date_updated=character()), class = "data.frame");
+
+datess <- seq(as.Date("2010-01-01"), as.Date("2017-12-31"), 10);
+
+
+#Building Picks Dataset
+lim <- length(datess)-1
+for (i in 1:lim){
+  j = i + 1;
+  nyt_query <- "query=&critics-pick=Y&";
+  nyt_qdate <- paste("opening-date=",paste(datess[i],datess[j],sep=";"),sep="","&"); #date range
+  nyt_key <- "api-key="; #apikey_times contains NYT api key
+  nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+  nyt_dat <- fromJSON(nyt_url2); 
+  nyt_2010_2017_pick <- rbind(nyt_2010_2017_pick,nyt_dat$results[-11][-10]);
+  Sys.sleep(1) #1-sec pause in between calls so API doesn't cut connection
+}
+
+#Building Non-Picks Dataset
+for (i in 1:lim){
+  j = i + 1;
+  nyt_query <- "query=&critics-pick=N&";
+  nyt_qdate <- paste("opening-date=",paste(datess[i],datess[j],sep=";"),sep="","&"); #date range
+  nyt_key <- "api-key="; #apikey_times contains NYT api key
+  nyt_url2 <- paste0(nyt_url,nyt_query,nyt_qdate,nyt_key,apikey_times);
+  nyt_dat <- fromJSON(nyt_url2);
+  nyt_dat$results <- nyt_dat$results[-11][-10][which(nyt_dat$results$critics_pick==0),]
+  nyt_2010_2017_nopick <- rbind(nyt_2010_2017_nopick,nyt_dat$results[-11][-10]);
+  print(datess[i]);
+  Sys.sleep(1); #1-sec pause in between calls so API doesn't cut connection
+}
+
+# Below are std query headlines:
+#names(nytdat$results)
+# [1] "display_title"    "mpaa_rating"      "critics_pick"     "byline"     
+# [5] "headline"         "summary_short"    "publication_date" "opening_date"    
+# [9] "date_updated"     "link"             "multimedia" 
+
+### Adding boxoffice earnings for the above
+nyt_2010_2017_pick_box <-NULL
+
+for (i in 1:length(nyt_2010_2017_pick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_2010_2017_pick$display_title[i], apikey = apikey_omdb));
+  if (is.null(content(omdb_q)$BoxOffice)){
+    cat("Null BoxOffice for:",nyt_2010_2017_pick$display_title[i],"\n");
+    nyt_2010_2017_pick_box <- c(nyt_2010_2017_pick_box,NA)
+  }else{
+  nyt_2010_2017_pick_box <- c(nyt_2010_2017_pick_box,content(omdb_q)$BoxOffice);
+  }
+}  
+
+#already have first 500. Limit of 1000 daily.
+nyt_2010_2017_nopick_box <-NULL
+
+for (i in 1:length(nyt_2010_2017_nopick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_2010_2017_nopick$display_title[i], apikey = apikey_omdb));
+  if (is.null(content(omdb_q)$BoxOffice)){
+    cat("Null BoxOffice for:",nyt_2010_2017_nopick$display_title[i],";; entry",i,"\n");
+    nyt_2010_2017_nopick_box <- c(nyt_2010_2017_nopick_box,NA)
+  }else{
+    nyt_2010_2017_nopick_box <- c(nyt_2010_2017_nopick_box,content(omdb_q)$BoxOffice);
+  }
+}
+
+#Cleaning up boxoffice returns and adding them to dataframes
+nyt_2010_2017_nopick <- cbind(nyt_2010_2017_nopick,boxoffice=as.numeric(gsub("[^0-9.]", "", nyt_2010_2017_nopick_box)))
+nyt_2010_2017_pick <- cbind(nyt_2010_2017_pick,boxoffice=as.numeric(gsub("[^0-9.]", "", nyt_2010_2017_pick_box)))
+
+###Adding genre
+#Load what I already have so as to not re-invent the wheel
+#nyt_2010_2017_pick <- read.csv("/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_pick.csv",header=T,stringsAsFactors = FALSE)
+#nyt_2010_2017_nopick <- read.csv("/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_nopick.csv",header=T,stringsAsFactors = FALSE)
+
+nyt_2010_2017_pick_extra <- structure(list(genre=character(),director=character(),writer=character(),actors=character(),awards=character()), class = "data.frame");
+nyt_2010_2017_nopick_extra <- structure(list(display_title=character(),boxoffice=character(),genre=character(),director=character(),writer=character(),actors=character(),awards=character()), class = "data.frame");
+
+#Picks
+for (i in 1:length(nyt_2010_2017_pick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_2010_2017_pick$display_title[i], apikey = apikey_omdb));
+  if (content(omdb_q)$Response == "False") {
+    cat("Movie",nyt_2010_2017_pick$display_title[i],"not found in OMDB. Writing NAs!\n");
+  nyt_2010_2017_pick_extra <- rbind(nyt_2010_2017_pick_extra,
+                          data.frame(display_title=nyt_2010_2017_pick$display_title[i],genre=NA,director=NA,writer=NA,actors=NA,awards=NA));
+  }else{
+    nyt_2010_2017_pick_extra <- rbind(nyt_2010_2017_pick_extra,
+                          data.frame(display_title=nyt_2010_2017_pick$display_title[i],genre=content(omdb_q)$Genre,director=content(omdb_q)$Director,writer=content(omdb_q)$Writer,actors=content(omdb_q)$Actors,awards=content(omdb_q)$Awards));
+  }
+}  
+
+#Nopicks
+for (i in 1:length(nyt_2010_2017_nopick$display_title)){
+  omdb_q <- GET(omdb_url, 
+          query = list(t = nyt_2010_2017_nopick$display_title[i], apikey = apikey_omdb));
+  if (content(omdb_q)$Response == "False") {
+    cat("Movie",nyt_2010_2017_nopick$display_title[i],"not found in OMDB. Writing NAs!\n");
+  nyt_2010_2017_nopick_extra <- rbind(nyt_2010_2017_nopick_extra,
+                          data.frame(display_title=nyt_2010_2017_nopick$display_title[i],boxoffice=NA,genre=NA,director=NA,writer=NA,actors=NA,awards=NA));
+  }else{
+    if (is.null(content(omdb_q)$BoxOffice)){
+    cat("Null BoxOffice for:",nyt_2010_2017_nopick$display_title[i],";; entry",i,"\n");
+    nyt_2010_2017_nopick_extra <- rbind(nyt_2010_2017_nopick_extra,
+                          data.frame(display_title=nyt_2010_2017_nopick$display_title[i],boxoffice=NA,genre=content(omdb_q)$Genre,director=content(omdb_q)$Director,writer=content(omdb_q)$Writer,actors=content(omdb_q)$Actors,awards=content(omdb_q)$Awards));
+    }else{
+      nyt_2010_2017_nopick_extra <- rbind(nyt_2010_2017_nopick_extra,
+                          data.frame(display_title=nyt_2010_2017_nopick$display_title[i],boxoffice=content(omdb_q)$BoxOffice,genre=content(omdb_q)$Genre,director=content(omdb_q)$Director,writer=content(omdb_q)$Writer,actors=content(omdb_q)$Actors,awards=content(omdb_q)$Awards));
+    }
+  }
+}  
+
+
+#Now merge both DFs
+nyt_2010_2017_pick <- merge(nyt_2010_2017_pick,nyt_2010_2017_pick_extra,by="display_title");
+nyt_2010_2017_nopick <- merge(nyt_2010_2017_nopick,nyt_2010_2017_nopick_extra,by="display_title");
+
+#Cleaning up Box Office var of special/unnecessary characters
+boxoffice=as.numeric(gsub("[^0-9.]", "", nyt_2010_2017_pick_box)))
+
+for (i in 1:length(nyt_2010_2017_nopick[,10])){
+  nyt_2010_2017_nopick[,10][i] <- as.numeric(gsub("[^0-9.]", "", nyt_2010_2017_nopick[,10][i]))
+}
+
+#Cleaning up Genre
+#Note that genre in the OMDB API data often contains more than one. I shall pick the very first item as the movie's definining genre using the following 
+nyt_2010_2017_nopick[,11] <- gsub("(.+?)(\\,.*)", "\\1",nyt_2010_2017_nopick[,11])
+nyt_2010_2017_pick[,11] <- gsub("(.+?)(\\,.*)", "\\1",nyt_2010_2017_pick[,11])
+
+#Cleaning up actor to only keep lead actor
+nyt_2010_2017_nopick[,14] <- gsub("(.+?)(\\,.*)", "\\1",nyt_2010_2017_nopick[,14])
+nyt_2010_2017_pick[,14] <- gsub("(.+?)(\\,.*)", "\\1",nyt_2010_2017_pick[,14])
+
+#Creating dummy variables for the following categories:
+  #1. At least one nomination to one of BAFTA, Golden Globe, or Oscar
+  #2. Director Male or Female
+  #3. Lead Actor Male or Female
+
+#1. Award Nomination
+
+#pick
+nomination1 <- numeric(length(nyt_2010_2017_pick[,15]));
+
+for(i in 1:length(nyt_2010_2017_pick[,15])){
+  if (grepl("Oscar",nyt_2010_2017_pick[i,15],fixed=TRUE) | grepl("Golden Globe",nyt_2010_2017_pick[i,15],fixed=TRUE) | grepl("BAFTA",nyt_2010_2017_pick[i,15],fixed=TRUE)){
+    nomination1[i] <- 1
+  }
+};
+
+nyt_2010_2017_pick <- data.frame(nyt_2010_2017_pick,nomination1)
+
+
+#nopick
+nomination <- numeric(length(nyt_2010_2017_nopick[,15]));
+
+for(i in 1:length(nyt_2010_2017_nopick[,15])){
+  if (grepl("Oscar",nyt_2010_2017_nopick[i,15],fixed=TRUE) | grepl("Golden Globe",nyt_2010_2017_nopick[i,15],fixed=TRUE) | grepl("BAFTA",nyt_2010_2017_nopick[i,15],fixed=TRUE)){
+    nomination[i] <- 1
+  }
+};
+
+nyt_2010_2017_nopick <- data.frame(nyt_2010_2017_nopick,nomination)
+######
+
+
+write.csv(nyt_2010_2017_nopick,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_nopick.csv",row.names = FALSE);
+write.csv(nyt_2010_2017_pick,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_pick.csv",row.names = FALSE);
+
+write.csv(nyt_2010_2017_nopick_python,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_nopick.csv",row.names = FALSE,sep="\t");
+write.csv(nyt_2010_2017_pick_python,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/nyt_2010_2017_pick.csv",row.names = FALSE,sep="\t");
+
+#2. OMDB
+# Get OMBD data on 1st title from above NYT query
+omdb_q <- GET(omdb_url, 
+          query = list(t = "Casa Grande", apikey = apikey_omdb));
+omdb_dat <- as.data.frame(content(omdb_q)); omdb_dat; 
+
+#names(omdb_dat)
+
+# [1] "Title"            "Year"             "Rated"            "Released"   
+# [5] "Runtime"          "Genre"            "Director"         "Writer"     
+# [9] "Actors"           "Plot"             "Language"         "Country"    
+#[13] "Awards"           "Poster"           "Ratings.Source"   "Ratings.Value"   
+#[17] "Ratings.Source.1" "Ratings.Value.1"  "Ratings.Source.2" "Ratings.Value.2" 
+#[21] "Metascore"        "imdbRating"       "imdbVotes"        "imdbID"          
+#[25] "Type"             "DVD"              "BoxOffice"        "Production"      
+#[29] "Website"          "Response"
+
+#Lead actor listed first in omdb_dat$Actors[1]
+#lead <- strsplit(as.character(omdb_dat$Actors[1]),",")[[1]][1]
+
+## BoxOfficeMojo
+
+#bodat <- boxoffice(dates = seq(as.Date("2017-01-01"), as.Date("2017-12-31"), "month"), site = "numbers",top_n=10)
+#bodat %>% filter(movie == nytdat$results$display_title[1]) %>% head()
+
+```
+
+
+```{r genderwork, include=F, eval=F}
+#Keys
+#Gender API
+apikey_gender1 <- "smBpawNvpAYomlNLoR"
+apikey_gender2 <-
+gender_url <-"https://gender-api.com/"
+#example
+#query <-"https://gender-api.com/get?name=elizabeth&key=smBpawNvpAYomlNLoR"
+#gender_dat <- fromJSON(query); 
+#gender_spec <- gender_dat$gender
+
+gender_build <- function(namer) {
+  out <- paste0("get?name=",namer,'&')
+  return(out)
+}
+
+gender_key <- "key=";
+#gender_url2 <- paster0(gender_url,gender_query(),gender_key,apikey_gender)
+
+#head(nyt_2010_2017_nopick)
+#names(nyt_2010_2017_nopick)
+#Picking principal actor [14], director[12], and writer[13]
+
+K <- dim(nyt_2010_2017_nopick)[1]
+actor_lead = director_lead = writer_lead = rep(NA,K)
+actor_lead_first = director_lead_first = writer_lead_first = rep(NA,K)
+iterer <- c(actor_lead,director_lead,writer_lead)
+
+#Get lead
+actor_lead <- gsub("(.+?)(\\,. *)", "\\1",nyt_2010_2017_nopick[,14])
+director_lead <- gsub("(.+?)(\\,. *)", "\\1",nyt_2010_2017_nopick[,12])
+writer_lead <- gsub("(.+?)(\\,. *)", "\\1",nyt_2010_2017_nopick[,13])
+
+#Get first names
+#sub("\\s.*","","Jannet's Guff")
+nyt_2010_2017_nopick$actor <- tolower(gsub("\\s.*", "\\1",nyt_2010_2017_nopick$actor))
+nyt_2010_2017_nopick$director <- tolower(gsub("\\s.*", "\\1",nyt_2010_2017_nopick$director))
+nyt_2010_2017_nopick$writer<- tolower(gsub("\\s.*", "\\1",nyt_2010_2017_nopick$writer))
+
+all_names <- tolower(c(nyt_2010_2017_nopick$director,nyt_2010_2017_nopick$actor,nyt_2010_2017_nopick$writer))
+
+#Getting unique names throughout all three variables to pass through API calls
+api_iter <- unique(all_names[complete.cases(all_names)])
+api_prod <- rep(NA,length(api_iter))
+
+for (i in 1:length(api_iter)){ #1:502, 503:length(api_iter)
+  gender_url2 <- paste0(gender_url,gender_build(api_iter[i]),gender_key,apikey_gender);
+  gender_dat <- fromJSON(gender_url2); 
+  api_prod[i] <- gender_dat$gender
+  cat(api_iter[i]," - ", api_prod[i],"\n");
+}
+
+#Got 500 gender assignments
+name_dict <- cbind(api_iter,api_prod)[1:501,]
+
+name_dict <- rbind(name_dict,name_dict2)
+
+####
+#Retrieving encoding from Pick's list
+#nyt_2010_2017_pick2 <- cbind(nyt_2010_2017_pick, nyt_2010_2017_pick_raw$actor,
+#nyt_2010_2017_pick_raw$director, nyt_2010_2017_pick_raw$writer)
+
+#colnames(nyt_2010_2017_pick2) <- #c(names(nyt_2010_2017_pick),"actor_nam","director_nam","writer_nam")
+
+#nyt_2010_2017_nopick <- cbind(nyt_2010_2017_nopick,)
+nyt_2010_2017_pick <- nyt_2010_2017_pick2
+
+pick_name <- nyt_2010_2017_pick[,c(17,12,16,14)]
+dict2_temp1 <- c(as.character(pick_nam$director_nam),as.character(pick_nam$actor_nam))
+dict2_temp2 <- c(as.numeric(pick_nam$director),as.numeric(pick_nam$actor))
+name_dict2 <- cbind(dict2_temp1,dict2_temp2)
+colnames(name_dict2) <- c(api_iter,api_prod)
+name_dict2 <- subset(name_dict2, name_dict2[,1] != "N/A" )
+
+name_dict2[,1] <- tolower(gsub("\\s.*", "\\1",name_dict2[,1]))
+
+name_dict2[,2] <- replace(name_dict2[,2], name_dict2[,2]==0, "male")
+name_dict2[,2] <- replace(name_dict2[,2], name_dict2[,2]==1, "female")
+name_dict2 <- subset(name_dict2, name_dict2[,1] != "Andrew" )
+name_dict2 <- unique(name_dict2)
+
+name_dict <- unique(rbind(name_dict,name_dict2))
+name_dict <- subset(name_dict, name_dict2[,2] != "unknown" )
+######
+
+
+actor_coded =  director_coded =  writer_coded = rep(NA,K)
+codifier <- cbind(actor_coded,director_coded,writer_coded)
+codifier2 <- cbind(nyt_2010_2017_nopick$actor,nyt_2010_2017_nopick$director,nyt_2010_2017_nopick$writer)
+
+#Populating encodings
+for (j in 1:3){ #iterate by crew
+  for (i in 1:K){ #iterate by movie
+    if(codifier2[i,j] %in% name_dict){
+      if(is.na(codifier2[i,j])){
+        cat(codifier2[i,j], "is NA the list, so ignoring!\n")
+      } else {
+        cat(codifier2[i,j], "is in the list!\n")
+        if(subset(name_dict,name_dict[,1] == codifier2[i,j])[2] == "female"){
+          codifier[i,j] <- 1
+        } else if(subset(name_dict,name_dict[,1] == codifier2[i,j])[2] == "male"){
+          codifier[i,j] <- 0
+        }
+      }
+    } else {
+      cat(codifier2[i,j], "is not in the list!\n")
+      codifier[i,j] <- NA
+    }
+  }
+}
+
+nyt_2010_2017_nopick_coded <- nyt_2010_2017_nopick[,c(1:11,17,18,16,15)]
+names(nyt_2010_2017_nopick_coded) <- c("display_title","mpaa_rating","critics_pick","byline","headline","summary_short","publication_date","opening_date","date_updated","boxoffice","genre","director","writer","actor","nomination")
+
+write.table(nyt_2010_2017_nopick_coded,"/Users/Balthazar/Desktop/Grad_School/COURSEWORK/Fall 2018/Data_Science_Methods/Project_I/data/current/nyt_2010_2017_nopick_coded.csv",row.names = FALSE,sep=",");
+
+```
